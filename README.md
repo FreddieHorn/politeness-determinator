@@ -1,1 +1,1 @@
-# politeness-determinator
+# rudeness-determinator
