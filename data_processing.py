@@ -5,7 +5,7 @@ from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from nltk.corpus import wordnet
 
-class DataPreprocessing:
+class DataPreprocessor:
     def __init__(self) -> None:
         # Initialize the lemmatizer
         self.wl = WordNetLemmatizer()
@@ -39,8 +39,11 @@ class DataPreprocessing:
     # Tokenize the sentence
     def _lemmatizer(self, string):
         word_pos_tags = nltk.pos_tag(word_tokenize(string)) # Get position tags
-        a=[self.wl.lemmatize(tag[0], self.get_wordnet_pos(tag[1])) for idx, tag in enumerate(word_pos_tags)] # Map the position tag and lemmatize the word/token
+        a=[self.wl.lemmatize(tag[0], self._get_wordnet_pos(tag[1])) for idx, tag in enumerate(word_pos_tags)] # Map the position tag and lemmatize the word/token
         return " ".join(a)
 
     def process(self, string):
         return self._lemmatizer(self._stopword(self._preprocess(string)))
+    
+if __name__ == "__main__":
+    pass
