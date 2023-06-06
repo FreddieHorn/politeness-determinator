@@ -15,7 +15,7 @@ if __name__ == "__main__":
     dataset = pd.read_csv(file)
     dataset = dataset[dataset['comment_body'] != '[deleted]']#deleting deleted comments from the dataset since they are useless
     dataset['clean_text'] = dataset['comment_body'].apply(lambda x: data_preprocessor.process(x))
-
+    
     #SPLITTING THE TRAINING DATASET INTO TRAIN AND TEST
     X_train, X_test, y_train, y_test = train_test_split(dataset["clean_text"], dataset['offensiveness_score'],test_size=0.2,shuffle=True)
 

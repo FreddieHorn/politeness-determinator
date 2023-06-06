@@ -5,6 +5,13 @@ from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from nltk.corpus import wordnet
 
+def tokenize_function(examples, tokenizer):
+    
+    """ This function tokenizes the text in the examples dictionary.
+        We pass it to the map function of the dataset so that we can batch the tokenization for efficiency by
+        tokenizing batches in parallel.
+    """
+    return tokenizer(examples["text"], padding="max_length", truncation=True)
 class DataPreprocessor:
     def __init__(self) -> None:
         # Initialize the lemmatizer
