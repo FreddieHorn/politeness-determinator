@@ -8,6 +8,7 @@ import torch
 from torch.utils.data import TensorDataset, DataLoader
 import pandas as pd
 import datetime
+import itertools
 
 def format_time(elapsed):
     '''
@@ -36,6 +37,11 @@ def tokenize_function(examples, tokenizer):
         tokenizing batches in parallel.
     """
     return tokenizer(examples["clean_text"], padding="max_length", truncation=True)
+
+def tokenize_words(dataframe, row):
+    dataframe["tokenized_sentences"] = dataframe[row].apply(nltk.word_tokenize)
+    token_list = list(itertools.chain(*dataframe["tokenized_sentences"].tolist()))
+    return token_list
 
 class DataPreprocessor:
     def __init__(self) -> None:
