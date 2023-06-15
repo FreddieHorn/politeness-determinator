@@ -7,11 +7,22 @@ from nltk.corpus import wordnet
 import torch
 from torch.utils.data import TensorDataset, DataLoader
 import pandas as pd
+import datetime
+
+def format_time(elapsed):
+    '''
+    Takes a time in seconds and returns a string hh:mm:ss
+    '''
+    # Round to the nearest second.
+    elapsed_rounded = int(round((elapsed)))
+    
+    # Format as hh:mm:ss
+    return str(datetime.timedelta(seconds=elapsed_rounded))
 
 def create_dataloaders(inputs, masks, labels, batch_size):
     input_tensor = torch.tensor(inputs)
     mask_tensor = torch.tensor(masks)
-    labels_tensor = torch.tensor(labels)
+    labels_tensor = torch.tensor(labels, dtype=torch.float64)
     dataset = TensorDataset(input_tensor, mask_tensor, 
                             labels_tensor)
     dataloader = DataLoader(dataset, batch_size=batch_size, 
@@ -75,6 +86,7 @@ class DFProcessor:
         dataset = dataset[dataset['comment_body'] != '[deleted]']#deleting deleted comments from the dataset since they are useless
         dataset['clean_text'] = dataset['comment_body'].apply(lambda x: text_cleaner.process(x))
         new_df = dataset.filter(items=['clean_text', 'offensiveness_score'])
+        print(new_df.dtypes)
         return new_df
 
 if __name__ == "__main__":
