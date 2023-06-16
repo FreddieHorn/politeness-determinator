@@ -1,20 +1,13 @@
 from lightning.pytorch.utilities.types import STEP_OUTPUT
-from transformers import RobertaTokenizer, RobertaModel, DistilBertModel, DistilBertTokenizer
+from transformers import RobertaTokenizer, RobertaModel
 from data_processing import DataPreprocessor, create_dataloaders, DFProcessor, format_time, tokenize_words
 from sklearn.model_selection import train_test_split
 import torch.nn as nn
-#from preprocessing import preprocessing_pipeline
-import pandas as pd
-import nltk
 import torch
 import numpy as np
-from torch.optim import AdamW
-#from transformers import AdamW, get_linear_schedule_with_warmup
 from tqdm import tqdm
 import time
-import matplotlib.pyplot as plt
 import lightning as L
-import wandb
 from lightning.pytorch.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
@@ -96,7 +89,7 @@ class TextAugmenterForBert:
 class Regressor(L.LightningModule):
     def __init__(self, bertlike_model, dropout=0.2, lr=1e-3) -> None:
         super().__init__()
-        D_in, D_out = 768, 1
+        D_in, D_out = 768, 1 #bert (or its derivatives) has 768 outputs 
         self.model = bertlike_model
         self.regressor = nn.Sequential(
             nn.Dropout(dropout),
@@ -199,7 +192,7 @@ if __name__=="__main__":
     ]
     trainer = L.Trainer(
         accelerator="gpu",
-        max_epochs = 5, 
+        max_epochs = 10, 
         logger = wandb_logger, 
         callbacks=callbacks
     )
