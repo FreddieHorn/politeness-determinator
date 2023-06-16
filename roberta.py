@@ -1,3 +1,5 @@
+from typing import Any, Optional
+from lightning.pytorch.utilities.types import STEP_OUTPUT
 from transformers import RobertaTokenizer, RobertaModel, DistilBertModel, DistilBertTokenizer
 from data_processing import DataPreprocessor, tokenize_function, create_dataloaders, DFProcessor, format_time, tokenize_words
 from sklearn.model_selection import train_test_split
@@ -13,6 +15,8 @@ from tqdm import tqdm
 import time
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler, Normalizer
+import lightning as L
+
 
 def train(model, optimizer, loss_function, epochs,       
             train_dataloader, device, clip_value=2):
@@ -30,7 +34,7 @@ def train(model, optimizer, loss_function, epochs,
                                 tuple(b.to(device) for b in batch)
                 model.zero_grad()
                 outputs = model(batch_inputs, batch_masks)           
-                loss = loss_function(outputs.float(), 
+                loss = loss_function(outputs.squeeze(1).float(), 
                                 batch_labels.float())
                 total_train_loss+=loss.item()
                 loss.backward()
@@ -65,6 +69,66 @@ def r2_score(outputs, labels):
     r2 = 1 - ss_res / ss_tot
     return r2
 
+class TextAugmenterForBert:
+    def __init__(self, tokenizer_name, df) -> None:
+        self.tokenizer = RobertaTokenizer.from_pretrained(model_name)
+        self.df = df
+        #adding tokens from our dataset that are not already in the tokenizer
+        token_list = tokenize_words(self.df, "clean_text")
+        num_added_toks = tokenizer.add_tokens(token_list)
+        print(f"Added {num_added_toks} to the tokenizer")
+    
+    def augment_data(self):
+        encoded_corpus = tokenizer(text = self.df.clean_text.to_list(),
+                            add_special_tokens=True,
+                            padding='max_length',
+                            truncation='longest_first',
+                            return_attention_mask=True)
+
+        input_ids = encoded_corpus['input_ids']
+        attention_mask = encoded_corpus['attention_mask']
+        input_ids = np.array(input_ids)
+        attention_mask = np.array(attention_mask)
+        labels = self.df.offensiveness_score.to_numpy()
+        return input_ids, labels, attention_mask
+
+class Regressor(L.LightningModule):
+    def __init__(self, bert, dropout) -> None:
+        super().__init__()
+        D_in, D_out = 768, 1
+        self.model = bert
+        self.regressor = nn.Sequential(
+            nn.Dropout(dropout),
+            nn.Linear(D_in, D_out))
+    
+    def forward(self, input_ids, attention_masks):
+        outputs = self.roberta(input_ids, attention_masks)
+        class_label_output = outputs[1] #Last layer hidden-state of the first token of the sequence (classification token) (but also can be used for regression)
+        outputs = self.regressor(class_label_output)
+        return torch.tanh(outputs)
+    
+    def configure_optimizers(self) -> Any:
+        optimizer = torch.optim.AdamW(self.parameters, lr=1e-3)
+        return optimizer
+    
+    def training_step(self, train_batch, batch_idx) -> STEP_OUTPUT:
+        batch_inputs, batch_masks, batch_labels = \
+                        tuple(b for b in train_batch)
+        outputs = model(batch_inputs, batch_masks)           
+        loss = loss_function(outputs.squeeze(1).float(), 
+                        batch_labels.float())
+        self.log("train_loss", loss)
+        return loss
+    
+    def validation_step(self, val_batch, batch_idx) -> STEP_OUTPUT | None:
+        batch_inputs, batch_masks, batch_labels = \
+                        tuple(b for b in val_batch)
+        outputs = model(batch_inputs, batch_masks)           
+        val_loss = loss_function(outputs.squeeze(1).float(), 
+                        batch_labels.float())
+        self.log("validation_loss", val_loss)
+        return val_loss
+
 class RobertaRegressor(nn.Module):
     def __init__(self, len_tokenizer, dropout=0.2, model_name = 'roberta-base'):
         super(RobertaRegressor, self).__init__()
@@ -72,58 +136,40 @@ class RobertaRegressor(nn.Module):
         self.roberta = RobertaModel.from_pretrained(model_name, num_labels=1)
         self.roberta.resize_token_embeddings(len(tokenizer))
         self.regressor = nn.Sequential(
+            nn.Dropout(dropout),
             nn.Linear(D_in, D_out))
         
     def forward(self, input_ids, attention_masks):
         outputs = self.roberta(input_ids, attention_masks)
-        class_label_output = outputs[0]
+        class_label_output = outputs[1] #Last layer hidden-state of the first token of the sequence (classification token) (but also can be used for regression)
         outputs = self.regressor(class_label_output)
-        return outputs
+        return torch.tanh(outputs) 
     
 if __name__=="__main__":
-    # nltk.download('averaged_perceptron_tagger')
-    # nltk.download('stopwords')
-    # nltk.download('punkt')
-    # nltk.download('wordnet')
-    # nltk.download()
-    # nltk.download('wordnet')
-    # print(nltk.find('corpora/wordnet.zip'))
-    model_name = 'roberta-base'
+    test_size = 0.2
+    val_size = 0.5
+    batch_size = 8
+    epochs = 10
 
+    model_name = 'roberta-base'
     tokenizer = RobertaTokenizer.from_pretrained(model_name)
-    #model = RobertaModel.from_pretrained(model_name)
 
     text_cleaner = DataPreprocessor()
-    file = 'ruddit_with_text.csv' 
-    df_processor = DFProcessor(filename=file)
-
+    df_processor = DFProcessor(filename='ruddit_with_text.csv')
     new_df = df_processor.process_df(text_cleaner)
-    #tokenizer(examples["clean_text"], padding="max_length", truncation=True)
-    token_list = tokenize_words(new_df, "clean_text")
-    num_added_toks = tokenizer.add_tokens(token_list)
-    print(f"Added {num_added_toks} tokens")
-    encoded_corpus = tokenizer(text = new_df.clean_text.to_list(),
-                            add_special_tokens=True,
-                            padding='max_length',
-                            truncation='longest_first',
-                            return_attention_mask=True)
-    print(tokenizer.decode(encoded_corpus["input_ids"][0]))
-
-    input_ids = encoded_corpus['input_ids']
-    attention_mask = encoded_corpus['attention_mask']
-    input_ids = np.array(input_ids)
-    attention_mask = np.array(attention_mask)
-    labels = new_df.offensiveness_score.to_numpy()
-
-    test_size = 0.1
-    batch_size = 8
+    data_augmentator = TextAugmenterForBert(tokenizer_name=model_name, df = new_df)
+    
+    input_ids, labels, attention_mask = data_augmentator.augment_data()
+    
     ## WILL SPLIT IT UP IN SEPARATE FILES DONT WORRY
     ##
     ##
-    train_inputs, test_inputs, train_labels, test_labels = \
-            train_test_split(input_ids, labels, test_size=test_size)
-    train_masks, test_masks, _, _ = train_test_split(attention_mask, 
-                                            labels, test_size=test_size)
+
+    train_inputs, test_inputs, train_labels, test_labels, train_masks, test_masks = \
+            train_test_split(input_ids, labels, attention_mask, test_size=test_size, shuffle=True)
+    
+    val_inputs, test_inputs, val_labels, test_labels, val_masks, test_masks = \
+            train_test_split(test_inputs, test_labels, test_masks, test_size=val_size)
     
     train_dataloader = create_dataloaders(train_inputs, train_masks, 
                                         train_labels, batch_size)
@@ -132,7 +178,7 @@ if __name__=="__main__":
     
 
     model = RobertaRegressor(len_tokenizer=len(tokenizer), dropout=0.2)
-    epochs = 10
+
     torch.cuda.empty_cache()
    # model.load_state_dict(torch.load(f"saved_models/{model_name}_{epochs}.pt"))
     if torch.cuda.is_available():       
@@ -159,7 +205,7 @@ if __name__=="__main__":
     from torch.nn.utils.clip_grad import clip_grad_norm
     model, train_loss = train(model, optimizer, loss_function, epochs, 
                train_dataloader, device)
-    torch.save(model.state_dict() ,f"saved_models/{model_name}_{epochs}_IMPROVED_TOKENIZER.pt")
+    torch.save(model.state_dict() ,f"saved_models/{model_name}_{epochs}_IMPROVED_TOKENIZER_tanh.pt")
     plt.plot(train_loss, 'b-o', label="Test")
     #plt.plot(test_r2, label="r2")
     plt.show()
