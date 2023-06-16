@@ -18,6 +18,7 @@ import wandb
 from lightning.pytorch.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
+#Those functions (train, evaluate, r2_score) probably won't be used in the future. Leaving them for now.
 def train(model, optimizer, loss_function, epochs,       
             train_dataloader, device, clip_value=2):
         train_loss, test_r2 = [], []
@@ -151,6 +152,7 @@ class RobertaRegressor(nn.Module):
         return torch.tanh(outputs) 
     
 if __name__=="__main__":
+    #TODO move hyperparamethers to a seperate CONFIG file
     test_size = 0.2
     val_size = 0.5
     batch_size = 8
@@ -186,6 +188,9 @@ if __name__=="__main__":
     
     model = Regressor(bertlike_model=bertlike_model)
     wandb_logger = WandbLogger(project = "rudeness_determinator")
+
+    #TODO early stopping.
+    #TODO get more metrics to wandb
     callbacks = [
         ModelCheckpoint(
             dirpath = "checkpoints",
@@ -202,6 +207,8 @@ if __name__=="__main__":
     trainer.fit(model, train_dataloader, val_dataloader)
 
 
+
+#NON-LIGHTNING DOWN HERE.
     # model = RobertaRegressor(len_tokenizer=len(tokenizer), dropout=0.2)
 
 #     torch.cuda.empty_cache()
