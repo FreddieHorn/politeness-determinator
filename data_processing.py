@@ -21,8 +21,8 @@ def format_time(elapsed):
     return str(datetime.timedelta(seconds=elapsed_rounded))
 
 def create_dataloaders(inputs, masks, labels, batch_size):
-    input_tensor = torch.tensor(inputs)
-    mask_tensor = torch.tensor(masks)
+    input_tensor = torch.tensor(inputs, dtype=torch.int32)
+    mask_tensor = torch.tensor(masks, dtype=torch.int32)
     labels_tensor = torch.tensor(labels, dtype=torch.float64)
     dataset = TensorDataset(input_tensor, mask_tensor, 
                             labels_tensor)

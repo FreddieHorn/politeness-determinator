@@ -1,7 +1,6 @@
-from typing import Any, Optional
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 from transformers import RobertaTokenizer, RobertaModel, DistilBertModel, DistilBertTokenizer
-from data_processing import DataPreprocessor, tokenize_function, create_dataloaders, DFProcessor, format_time, tokenize_words
+from data_processing import DataPreprocessor, create_dataloaders, DFProcessor, format_time, tokenize_words
 from sklearn.model_selection import train_test_split
 import torch.nn as nn
 #from preprocessing import preprocessing_pipeline
@@ -14,9 +13,10 @@ from torch.optim import AdamW
 from tqdm import tqdm
 import time
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler, Normalizer
 import lightning as L
-
+import wandb
+from lightning.pytorch.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import WandbLogger
 
 def train(model, optimizer, loss_function, epochs,       
             train_dataloader, device, clip_value=2):
@@ -71,15 +71,15 @@ def r2_score(outputs, labels):
 
 class TextAugmenterForBert:
     def __init__(self, tokenizer_name, df) -> None:
-        self.tokenizer = RobertaTokenizer.from_pretrained(model_name)
+        self.tokenizer = RobertaTokenizer.from_pretrained(tokenizer_name)
         self.df = df
         #adding tokens from our dataset that are not already in the tokenizer
         token_list = tokenize_words(self.df, "clean_text")
-        num_added_toks = tokenizer.add_tokens(token_list)
+        num_added_toks = self.tokenizer.add_tokens(token_list)
         print(f"Added {num_added_toks} to the tokenizer")
     
     def augment_data(self):
-        encoded_corpus = tokenizer(text = self.df.clean_text.to_list(),
+        encoded_corpus = self.tokenizer(text = self.df.clean_text.to_list(),
                             add_special_tokens=True,
                             padding='max_length',
                             truncation='longest_first',
@@ -93,40 +93,45 @@ class TextAugmenterForBert:
         return input_ids, labels, attention_mask
 
 class Regressor(L.LightningModule):
-    def __init__(self, bert, dropout) -> None:
+    def __init__(self, bertlike_model, dropout=0.2, lr=1e-3) -> None:
         super().__init__()
         D_in, D_out = 768, 1
-        self.model = bert
+        self.model = bertlike_model
         self.regressor = nn.Sequential(
             nn.Dropout(dropout),
             nn.Linear(D_in, D_out))
-    
+        self.loss = nn.MSELoss()
+        self.lr = lr
+        
+        # # save hyper-parameters to self.hparams (auto-logged by W&B)
+        # self.save_hyperparameters()
+
     def forward(self, input_ids, attention_masks):
-        outputs = self.roberta(input_ids, attention_masks)
+        outputs = self.model(input_ids, attention_masks)
         class_label_output = outputs[1] #Last layer hidden-state of the first token of the sequence (classification token) (but also can be used for regression)
         outputs = self.regressor(class_label_output)
         return torch.tanh(outputs)
     
-    def configure_optimizers(self) -> Any:
-        optimizer = torch.optim.AdamW(self.parameters, lr=1e-3)
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr)
         return optimizer
     
     def training_step(self, train_batch, batch_idx) -> STEP_OUTPUT:
         batch_inputs, batch_masks, batch_labels = \
                         tuple(b for b in train_batch)
-        outputs = model(batch_inputs, batch_masks)           
-        loss = loss_function(outputs.squeeze(1).float(), 
+        outputs = self(batch_inputs, batch_masks)           
+        loss = self.loss(outputs.squeeze(1).float(), 
                         batch_labels.float())
-        self.log("train_loss", loss)
+        self.log("train/loss", loss)
         return loss
     
-    def validation_step(self, val_batch, batch_idx) -> STEP_OUTPUT | None:
+    def validation_step(self, val_batch, batch_idx) -> STEP_OUTPUT:
         batch_inputs, batch_masks, batch_labels = \
                         tuple(b for b in val_batch)
-        outputs = model(batch_inputs, batch_masks)           
-        val_loss = loss_function(outputs.squeeze(1).float(), 
+        outputs = self(batch_inputs, batch_masks)    
+        val_loss = self.loss(outputs.squeeze(1).float(), 
                         batch_labels.float())
-        self.log("validation_loss", val_loss)
+        self.log("val/loss", val_loss)
         return val_loss
 
 class RobertaRegressor(nn.Module):
@@ -134,7 +139,7 @@ class RobertaRegressor(nn.Module):
         super(RobertaRegressor, self).__init__()
         D_in, D_out = 768, 1
         self.roberta = RobertaModel.from_pretrained(model_name, num_labels=1)
-        self.roberta.resize_token_embeddings(len(tokenizer))
+        self.roberta.resize_token_embeddings(len(len_tokenizer))
         self.regressor = nn.Sequential(
             nn.Dropout(dropout),
             nn.Linear(D_in, D_out))
@@ -152,22 +157,19 @@ if __name__=="__main__":
     epochs = 10
 
     model_name = 'roberta-base'
-    tokenizer = RobertaTokenizer.from_pretrained(model_name)
 
     text_cleaner = DataPreprocessor()
     df_processor = DFProcessor(filename='ruddit_with_text.csv')
-    new_df = df_processor.process_df(text_cleaner)
-    data_augmentator = TextAugmenterForBert(tokenizer_name=model_name, df = new_df)
-    
-    input_ids, labels, attention_mask = data_augmentator.augment_data()
-    
-    ## WILL SPLIT IT UP IN SEPARATE FILES DONT WORRY
-    ##
-    ##
 
+    new_df = df_processor.process_df(text_cleaner)
+
+    data_augmentator = TextAugmenterForBert(tokenizer_name=model_name, df = new_df)
+    #here we do everything tokenizer-related i.e. encoding corpus, getting input ids etc.
+    input_ids, labels, attention_mask = data_augmentator.augment_data()
+
+    #80% train 10% test 10% val is proposed
     train_inputs, test_inputs, train_labels, test_labels, train_masks, test_masks = \
             train_test_split(input_ids, labels, attention_mask, test_size=test_size, shuffle=True)
-    
     val_inputs, test_inputs, val_labels, test_labels, val_masks, test_masks = \
             train_test_split(test_inputs, test_labels, test_masks, test_size=val_size)
     
@@ -175,37 +177,56 @@ if __name__=="__main__":
                                         train_labels, batch_size)
     test_dataloader = create_dataloaders(test_inputs, test_masks, 
                                         test_labels, batch_size)
+    val_dataloader = create_dataloaders(val_inputs, val_masks, 
+                                        val_labels, batch_size)
     
-
-    model = RobertaRegressor(len_tokenizer=len(tokenizer), dropout=0.2)
-
-    torch.cuda.empty_cache()
-   # model.load_state_dict(torch.load(f"saved_models/{model_name}_{epochs}.pt"))
-    if torch.cuda.is_available():       
-        device = torch.device("cuda")
-        print("Using GPU.")
-    else:
-        print("No GPU available, using the CPU instead.")
-        device = torch.device("cpu")
-
-    model.to(device)
+    #here declare bert-like model, just change the "RobertaModel" into something else.
+    bertlike_model = RobertaModel.from_pretrained(model_name, num_labels=1)
+    bertlike_model.resize_token_embeddings(len(data_augmentator.tokenizer))
     
-    optimizer = AdamW(model.parameters(),
-                  lr=1e-3,
-                  eps=1e-8)
-    total_steps = len(train_dataloader) * epochs
-    # scheduler = get_linear_schedule_with_warmup(optimizer,       
-    #                 num_warmup_steps=0, num_training_steps=total_steps)
-    # scheduler = get_linear_schedule_with_warmup(optimizer,       
-    #              num_warmup_steps=0, num_training_steps=total_steps)
-    loss_function = nn.MSELoss()
+    model = Regressor(bertlike_model=bertlike_model)
+    wandb_logger = WandbLogger(project = "rudeness_determinator")
+    callbacks = [
+        ModelCheckpoint(
+            dirpath = "checkpoints",
+            every_n_train_steps=100,
+        ),
+    ]
+    trainer = L.Trainer(
+        accelerator="gpu",
+        max_epochs = 5, 
+        logger = wandb_logger, 
+        callbacks=callbacks
+    )
 
-    #test_loss, test_r2 = evaluate(model, loss_function, test_dataloader, device)
+    trainer.fit(model, train_dataloader, val_dataloader)
 
-    from torch.nn.utils.clip_grad import clip_grad_norm
-    model, train_loss = train(model, optimizer, loss_function, epochs, 
-               train_dataloader, device)
-    torch.save(model.state_dict() ,f"saved_models/{model_name}_{epochs}_IMPROVED_TOKENIZER_tanh.pt")
-    plt.plot(train_loss, 'b-o', label="Test")
-    #plt.plot(test_r2, label="r2")
-    plt.show()
+
+    # model = RobertaRegressor(len_tokenizer=len(tokenizer), dropout=0.2)
+
+#     torch.cuda.empty_cache()
+#    # model.load_state_dict(torch.load(f"saved_models/{model_name}_{epochs}.pt"))
+#     if torch.cuda.is_available():       
+#         device = torch.device("cuda")
+#         print("Using GPU.")
+#     else:
+#         print("No GPU available, using the CPU instead.")
+#         device = torch.device("cpu")
+
+#     wandb_logger = WandbLogger(project = "<project_name>")
+    # model.to(device)
+    
+    # optimizer = AdamW(model.parameters(),
+    #               lr=1e-3,
+    #               eps=1e-8)
+    # total_steps = len(train_dataloader) * epochs
+
+    # loss_function = nn.MSELoss()
+
+    # model, train_loss = train(model, optimizer, loss_function, epochs, 
+    #            train_dataloader, device)
+    
+    # #torch.save(model.state_dict() ,f"saved_models/{model_name}_{epochs}_IMPROVED_TOKENIZER_tanh.pt")
+    # plt.plot(train_loss, 'b-o', label="Test")
+    # #plt.plot(test_r2, label="r2")
+    # plt.show()
