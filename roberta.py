@@ -192,7 +192,7 @@ if __name__=="__main__":
     ]
     trainer = L.Trainer(
         accelerator="gpu",
-        max_epochs = 10, 
+        max_epochs = 50, 
         logger = wandb_logger, 
         callbacks=callbacks
     )
