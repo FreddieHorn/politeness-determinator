@@ -10,6 +10,7 @@ import time
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
+import wandb
 
 #Those functions (train, evaluate, r2_score) probably won't be used in the future. Leaving them for now.
 def train(model, optimizer, loss_function, epochs,       
@@ -180,6 +181,7 @@ if __name__=="__main__":
     bertlike_model.resize_token_embeddings(len(data_augmentator.tokenizer))
     
     model = Regressor(bertlike_model=bertlike_model)
+    wandb.login()
     wandb_logger = WandbLogger(project = "rudeness_determinator")
 
     #TODO early stopping.
