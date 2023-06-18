@@ -4,6 +4,44 @@ from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from nltk.corpus import wordnet
+import torch
+from torch.utils.data import TensorDataset, DataLoader
+import pandas as pd
+import datetime
+import itertools
+
+def format_time(elapsed):
+    '''
+    Takes a time in seconds and returns a string hh:mm:ss
+    '''
+    # Round to the nearest second.
+    elapsed_rounded = int(round((elapsed)))
+    
+    # Format as hh:mm:ss
+    return str(datetime.timedelta(seconds=elapsed_rounded))
+
+def create_dataloaders(inputs, masks, labels, batch_size):
+    input_tensor = torch.tensor(inputs, dtype=torch.int32)
+    mask_tensor = torch.tensor(masks, dtype=torch.int32)
+    labels_tensor = torch.tensor(labels, dtype=torch.float64)
+    dataset = TensorDataset(input_tensor, mask_tensor, 
+                            labels_tensor)
+    dataloader = DataLoader(dataset, batch_size=batch_size, 
+                            shuffle=True)
+    return dataloader
+
+def tokenize_function(examples, tokenizer):
+    
+    """ This function tokenizes the text in the examples dictionary.
+        We pass it to the map function of the dataset so that we can batch the tokenization for efficiency by
+        tokenizing batches in parallel.
+    """
+    return tokenizer(examples["clean_text"], padding="max_length", truncation=True)
+
+def tokenize_words(dataframe, column):
+    dataframe["tokenized_sentences"] = dataframe[column].apply(nltk.word_tokenize)
+    token_list = list(itertools.chain(*dataframe["tokenized_sentences"].tolist()))
+    return token_list
 
 class DataPreprocessor:
     def __init__(self) -> None:
@@ -44,6 +82,18 @@ class DataPreprocessor:
 
     def process(self, string):
         return self._lemmatizer(self._stopword(self._preprocess(string)))
-    
+
+class DFProcessor:
+    def __init__(self, filename) -> None:
+        self.filename = filename
+
+    def process_df(self, text_cleaner):
+        dataset = pd.read_csv(self.filename)
+        dataset = dataset[dataset['comment_body'] != '[deleted]']#deleting deleted comments from the dataset since they are useless
+        dataset['clean_text'] = dataset['comment_body'].apply(lambda x: text_cleaner.process(x))
+        new_df = dataset.filter(items=['clean_text', 'offensiveness_score'])
+        print(new_df.dtypes)
+        return new_df
+
 if __name__ == "__main__":
     pass
