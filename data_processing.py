@@ -26,8 +26,7 @@ def create_dataloaders(inputs, masks, labels, batch_size):
     labels_tensor = torch.tensor(labels, dtype=torch.float64)
     dataset = TensorDataset(input_tensor, mask_tensor, 
                             labels_tensor)
-    dataloader = DataLoader(dataset, batch_size=batch_size, 
-                            shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=5)
     return dataloader
 
 def tokenize_function(examples, tokenizer):
@@ -89,9 +88,9 @@ class DFProcessor:
 
     def process_df(self, text_cleaner):
         dataset = pd.read_csv(self.filename)
-        dataset = dataset[dataset['comment_body'] != '[deleted]']#deleting deleted comments from the dataset since they are useless
-        dataset['clean_text'] = dataset['comment_body'].apply(lambda x: text_cleaner.process(x))
-        new_df = dataset.filter(items=['clean_text', 'offensiveness_score'])
+        dataset = dataset[dataset['comment_body'] != '[deleted]'] #deleting deleted comments from the dataset since they are useless
+        dataset['comment_body'] = dataset['comment_body'].apply(lambda x: text_cleaner.process(x))
+        new_df = dataset.filter(items=['comment_body', 'offensiveness_score'])
         print(new_df.dtypes)
         return new_df
 
