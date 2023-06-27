@@ -90,12 +90,9 @@ test_loader = DataLoader(
 
 
 class LinearModel(L.LightningModule):
-    """A GRU model with a linear regression layer
+    """A simple 5-layered linear model that will be used as a baseline to compare the performance with the other more sophisticated models.
 
     Args:
-        hidden_size (int): hidden size of the GRU layer (default: `128`).
-        num_layers (int): number of GRU cells within the GRU layer (default: `1`).
-        dropout (float): GRU layer dropout (default: `0.0`).
         accuracy_threshold (float): maximum value a prediction can be away from the true value before it is considered inaccurate (default: `0.05`).
         lr (float): learning rate (default: `1e-3`).
     """  # noqa: E501
