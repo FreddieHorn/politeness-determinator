@@ -104,6 +104,7 @@ class DFProcessor:
         dataset = dataset[dataset['comment_body'] != '[deleted]'] #deleting deleted comments from the dataset since they are useless
         #dataset['comment_body'] = dataset['comment_body'].apply(lambda x: text_cleaner.process(x))
         new_df = dataset.filter(items=['comment_body', 'offensiveness_score'])
+
         print(new_df.dtypes)
         return new_df
 
