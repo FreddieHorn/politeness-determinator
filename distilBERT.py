@@ -12,7 +12,13 @@ import wandb
 from torchmetrics import R2Score
 
 class TextAugmenterForBert:
-    def __init__(self, tokenizer_name, df) -> None:
+    """Stores tokenizer denoted by tokenizer_name and possesses augment data method, which tokenizes 
+    comments which the dataset consists of.
+    Args:
+        tokenizer_name (str): name of the tokenizer to retrieve from AutoTokenizer
+        df (DataFrame): dataset ['comment_body', 'offensiveness score']
+    """
+    def __init__(self, tokenizer_name: str, df) -> None:
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         self.df = df
         #adding tokens from our dataset that are not already in the tokenizer - RUINED RESULTS!!
@@ -36,6 +42,16 @@ class TextAugmenterForBert:
         return input_ids, labels, attention_mask
 
 class Regressor(L.LightningModule):
+    """This module consists of distilBERT with regression layer on top of it so it suits the given task of determining the offensiveness score. 
+
+    Args:
+        bertlike_model: model from the big family of BERTs. distilBERT is used, but it is capable of handling other models (like RoBERTA) 
+        with a little to no tweaks in the code.
+        total_training_steps (int): number of training steps. This number is used in a scheduler which modifies the lr based on the current
+        training step
+        dropout (float, optional): Dropout in a regression layer placed on top of distilBERT. Defaults to 0.2.
+        lr (_type_, optional): learning rate parameter. Defaults to 1e-3.
+    """
     def __init__(self, bertlike_model, total_training_steps, dropout=0.2, lr=1e-3) -> None:
         super().__init__()
         D_in, D_out = 768, 1 #bert (or its derivatives) has 768 outputs 
@@ -97,7 +113,7 @@ class Regressor(L.LightningModule):
                         tuple(b for b in test_batch)
         outputs = self(batch_inputs, batch_masks)
         preds = torch.tanh(outputs) 
-        mae_loss = self.loss(preds.squeeze(1).float(), 
+        mae_loss = self.MAE(preds.squeeze(1).float(), 
                         batch_labels.float())
         r2_score = self.R2(preds.squeeze(1).float(), #warning! using batch_size = 8 made the last test step have only one sample in 
                             batch_labels.float())

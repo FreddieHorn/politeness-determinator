@@ -48,6 +48,8 @@ def tokenize_words(dataframe, column):
 
 
 class DataPreprocessor:
+    """Class that is responsible for cleaning text.
+    """
     def __init__(self) -> None:
         # Initialize the lemmatizer
         self.wl = WordNetLemmatizer()
@@ -96,16 +98,19 @@ class DataPreprocessor:
 
 
 class DFProcessor:
-    def __init__(self, filename) -> None:
+    """Handles processing of a given column of the dataframe.
+
+    Args:
+        filename (str): filename
+    """
+    def __init__(self, filename: str) -> None:
         self.filename = filename
 
     def process_df(self, text_cleaner):
         dataset = pd.read_csv(self.filename)
         dataset = dataset[dataset['comment_body'] != '[deleted]'] #deleting deleted comments from the dataset since they are useless
-        #dataset['comment_body'] = dataset['comment_body'].apply(lambda x: text_cleaner.process(x))
+        #dataset['comment_body'] = dataset['comment_body'].apply(lambda x: text_cleaner.process(x)) #in practise it did not help much
         new_df = dataset.filter(items=['comment_body', 'offensiveness_score'])
-
-        print(new_df.dtypes)
         return new_df
 
 
