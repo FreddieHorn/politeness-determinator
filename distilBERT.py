@@ -1,15 +1,16 @@
 from lightning.pytorch.utilities.types import STEP_OUTPUT
-from transformers import DistilBertModel, AutoTokenizer, AdamW, get_linear_schedule_with_warmup
-from data_processing import DataPreprocessor, create_dataloaders, DFProcessor, format_time, tokenize_words
-from sklearn.model_selection import train_test_split
-import torch.nn as nn
-import torch
-import numpy as np
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 import wandb
+from transformers import DistilBertModel, AutoTokenizer, get_linear_schedule_with_warmup
+from sklearn.model_selection import train_test_split
+import torch.nn as nn
+import torch
+import numpy as np
 from torchmetrics import R2Score
+
+from data_processing import DataPreprocessor, create_dataloaders, DFProcessor
 
 class TextAugmenterForBert:
     """Stores tokenizer denoted by tokenizer_name and possesses augment data method, which tokenizes 
@@ -50,7 +51,7 @@ class Regressor(L.LightningModule):
         total_training_steps (int): number of training steps. This number is used in a scheduler which modifies the lr based on the current
         training step
         dropout (float, optional): Dropout in a regression layer placed on top of distilBERT. Defaults to 0.2.
-        lr (_type_, optional): learning rate parameter. Defaults to 1e-3.
+        lr (float, optional): learning rate parameter. Defaults to 1e-3.
     """
     def __init__(self, bertlike_model, total_training_steps, dropout=0.2, lr=1e-3) -> None:
         super().__init__()
