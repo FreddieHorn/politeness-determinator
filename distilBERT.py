@@ -1,3 +1,5 @@
+import os
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 from transformers import DistilBertModel, AutoTokenizer, AdamW, get_linear_schedule_with_warmup
 from data_processing import DataPreprocessor, create_dataloaders, DFProcessor, format_time, tokenize_words
@@ -21,7 +23,7 @@ class TextAugmenterForBert:
         # print(f"Added {num_added_toks} to the tokenizer")
     
     def augment_data(self):
-        encoded_corpus = self.tokenizer(text = self.df.comment_body.to_list(),
+        encoded_corpus = self.tokenizer(text = self.df.title_body.to_list(),
                             add_special_tokens=True,
                             padding="max_length",
                             truncation=True,
@@ -97,17 +99,20 @@ class Regressor(L.LightningModule):
                         tuple(b for b in test_batch)
         outputs = self(batch_inputs, batch_masks)
         preds = torch.tanh(outputs) 
-        mae_loss = self.loss(preds.squeeze(1).float(), 
+        mse_loss = self.loss(preds.squeeze(1).float(), 
                         batch_labels.float())
         r2_score = self.R2(preds.squeeze(1).float(), #warning! using batch_size = 8 made the last test step have only one sample in 
                             batch_labels.float())
         std = torch.std(preds.squeeze(1).float())   #preds and batch labels. r2 needs > 1 samples so I increased batch size to 16
-        self.log("mae_loss", mae_loss)
+        self.log("mse_loss", mse_loss)
         self.log("r2_score", r2_score)
         self.log("test_std", std) #for experiments. dont include in official version
-        return mae_loss, r2_score
+        return mse_loss, r2_score
     
 if __name__=="__main__":
+    
+
+
     #TODO move hyperparamethers to a seperate CONFIG file
     test_size = 0.2
     val_size = 0.5
@@ -157,7 +162,7 @@ if __name__=="__main__":
         ),
     ]
     trainer = L.Trainer(
-        accelerator="gpu",
+        accelerator="cpu",
         max_epochs = epochs, 
         logger = wandb_logger, 
         callbacks = callbacks
