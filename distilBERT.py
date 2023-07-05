@@ -28,7 +28,7 @@ class TextAugmenterForBert:
         # print(f"Added {num_added_toks} to the tokenizer")
     
     def augment_data(self):
-        encoded_corpus = self.tokenizer(text = self.df.comment_body.to_list(),
+        encoded_corpus = self.tokenizer(text = self.df.title_body.to_list(),
                             add_special_tokens=True,
                             padding="max_length",
                             truncation=True,
@@ -53,7 +53,8 @@ class Regressor(L.LightningModule):
         dropout (float, optional): Dropout in a regression layer placed on top of distilBERT. Defaults to 0.2.
         lr (float, optional): learning rate parameter. Defaults to 1e-3.
     """
-    def __init__(self, bertlike_model, total_training_steps, dropout=0.2, lr=1e-3) -> None:
+    def __init__(self, bertlike_model, total_training_steps, dropout=0.2, lr=1e-3,
+                 accuracy_threshold: float = 0.05) -> None:
         super().__init__()
         D_in, D_out = 768, 1 #bert (or its derivatives) has 768 outputs 
         self.model = bertlike_model
@@ -69,6 +70,7 @@ class Regressor(L.LightningModule):
         self.lr = lr
         self.drop = nn.Dropout(dropout)
         self.total_steps = total_training_steps #param for get_linear_schedule_with_warmup
+        self.threshold = accuracy_threshold
         
         # # save hyper-parameters to self.hparams (auto-logged by W&B)
         # self.save_hyperparameters()
@@ -119,6 +121,10 @@ class Regressor(L.LightningModule):
         r2_score = self.R2(preds.squeeze(1).float(), #warning! using batch_size = 8 made the last test step have only one sample in 
                             batch_labels.float())
         std = torch.std(preds.squeeze(1).float())   #preds and batch labels. r2 needs > 1 samples so I increased batch size to 16
+        accuracy = torch.sum(torch.abs(batch_labels - preds.squeeze(1)) < self.threshold).item() / len(
+            batch_labels
+        )
+        self.log("test accuracy", accuracy)
         self.log("mae_loss", mae_loss)
         self.log("r2_score", r2_score)
         self.log("test_std", std) #for experiments. dont include in official version
@@ -179,6 +185,6 @@ if __name__=="__main__":
         logger = wandb_logger, 
         callbacks = callbacks
     )
-    trainer.fit(model, train_dataloader, val_dataloader)
-    trainer.test(model, dataloaders=test_dataloader) #Uncomment to TEST
-    wandb.save('checkpoints/*ckpt*') #save checkpoint to wandb 
+    #trainer.fit(model, train_dataloader, val_dataloader)
+    trainer.test(model, ckpt_path="checkpoints/DistilBERT-NAT-NP-WITH_SCHEDULER_RUN2_NO_FREEZE-epoch=19-val_loss=0.03.ckpt", dataloaders=test_dataloader) #Uncomment to TEST
+    #wandb.save('checkpoints/*ckpt*') #save checkpoint to wandb 
