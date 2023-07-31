@@ -11,6 +11,8 @@ from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 from torch.utils.data import DataLoader, TensorDataset
 
+PUNCT_TO_REMOVE = string.punctuation
+
 
 def format_time(elapsed):
     """
@@ -55,15 +57,15 @@ class DataPreprocessor:
         self.wl = WordNetLemmatizer()
 
     def _preprocess(self, text):
-        text = text.lower()
+        text = text.lower() 
         text = text.strip()
-        text = re.compile("<.*?>").sub("", text)
-        text = re.compile("[%s]" % re.escape(string.punctuation)).sub(" ", text)
-        text = re.sub("\s+", " ", text)
-        text = re.sub(r"\[[0-9]*\]", " ", text)
-        text = re.sub(r"[^\w\s]", "", str(text).lower().strip())
-        text = re.sub(r"\d", " ", text)
-        text = re.sub(r"\s+", " ", text)
+        text = text.translate(str.maketrans('', '', PUNCT_TO_REMOVE))
+        text = re.compile('<.*?>').sub('', text) 
+        text = re.sub('\s+', ' ', text)  
+        text = re.sub(r'\[[0-9]*\]',' ',text) 
+        text = re.sub(r'[^\w\s]', '', str(text).lower().strip())
+        text = re.sub(r'\d',' ',text) 
+        text = re.sub(r'\s+',' ',text) 
         return text
 
     def _stopword(self, string):
@@ -96,6 +98,12 @@ class DataPreprocessor:
     def process(self, string):
         return self._lemmatizer(self._stopword(self._preprocess(string)))
 
+def check(df):
+    punctuation_pattern = r'[!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~]'
+    for item in df['clean_text']:
+        match = re.search(punctuation_pattern, item)
+        if bool(match) == True:
+            print(item.index())
 
 class DFProcessor:
     """Handles processing of a given column of the dataframe.
@@ -109,9 +117,14 @@ class DFProcessor:
     def process_df(self, text_cleaner):
         dataset = pd.read_csv(self.filename)
         dataset = dataset[dataset['comment_body'] != '[deleted]'] #deleting deleted comments from the dataset since they are useless
-        #dataset['comment_body'] = dataset['comment_body'].apply(lambda x: text_cleaner.process(x)) #in practise it did not help much
+        #dataset['comment_body'] = dataset['comment_body'].apply(lambda x: text_cleaner.process(x))
+
         dataset = dataset[dataset['post_title'] != '[deleted]']
         dataset = dataset[dataset['post_title'] != '[deleted by user]']
+
+        dataset['title_body'] = dataset['comment_body']+ ' ' + dataset['post_title']
+        new_df = dataset.filter(items=['title_body', 'offensiveness_score'])
+
 
         dataset['title_body'] = dataset['post_title'] + '[POS]' + dataset['comment_body'] 
 

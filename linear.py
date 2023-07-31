@@ -2,7 +2,7 @@
 
 import argparse
 import os
-
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
 import lightning as L
 import numpy as np
 import pandas as pd
@@ -23,7 +23,7 @@ wandb.login()
 
 # load the dataset
 ruddit = pd.read_csv("ruddit_with_text.csv")
-nlp_md = spacy.load("en_core_web_md")
+nlp_md = spacy.load("en_core_web_sm")
 
 # exclude deleted comments
 filter = ruddit[ruddit["comment_body"] != "[deleted]"]
@@ -145,12 +145,13 @@ class LinearModel(L.LightningModule):
         accuracy = torch.sum(torch.abs(scores - ratings) < self.threshold).item() / len(
             scores
         )
-        loss = l1_loss(ratings, scores)
+        loss = mse_loss(ratings, scores)
         self.log("test R2 score", score, prog_bar=True)
         self.log("test accuracy", accuracy, prog_bar=True)
         self.log("test loss", loss, prog_bar=True)
         # combine the 3 metrics
-        return score * accuracy - loss
+        print(loss)
+        return loss
 
     # predict a score for a single comment
     def predict(self, X: Tensor) -> Tensor:
@@ -167,7 +168,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--accuracy_threshold", "-t", type=float, default=0.05)
     parser.add_argument("--lr", "-l", type=float, default=1e-3)
-    parser.add_argument("--epochs", "-e", type=int, default=100)
+    parser.add_argument("--epochs", "-e", type=int, default=10)
     args = parser.parse_args()
 
     model = LinearModel(

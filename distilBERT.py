@@ -1,3 +1,5 @@
+import os
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
@@ -131,6 +133,9 @@ class Regressor(L.LightningModule):
         return mae_loss, r2_score
     
 if __name__=="__main__":
+    
+
+
     #TODO move hyperparamethers to a seperate CONFIG file
     test_size = 0.2
     val_size = 0.5
@@ -180,7 +185,7 @@ if __name__=="__main__":
         ),
     ]
     trainer = L.Trainer(
-        accelerator="gpu",
+        accelerator="cpu",
         max_epochs = epochs, 
         logger = wandb_logger, 
         callbacks = callbacks
