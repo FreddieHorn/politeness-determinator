@@ -11,6 +11,8 @@ from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 from torch.utils.data import DataLoader, TensorDataset
 
+PUNCT_TO_REMOVE = string.punctuation
+
 
 def format_time(elapsed):
     """
@@ -53,15 +55,15 @@ class DataPreprocessor:
         self.wl = WordNetLemmatizer()
 
     def _preprocess(self, text):
-        text = text.lower()
+        text = text.lower() 
         text = text.strip()
-        text = re.compile("<.*?>").sub("", text)
-        text = re.compile("[%s]" % re.escape(string.punctuation)).sub(" ", text)
-        text = re.sub("\s+", " ", text)
-        text = re.sub(r"\[[0-9]*\]", " ", text)
-        text = re.sub(r"[^\w\s]", "", str(text).lower().strip())
-        text = re.sub(r"\d", " ", text)
-        text = re.sub(r"\s+", " ", text)
+        text = text.translate(str.maketrans('', '', PUNCT_TO_REMOVE))
+        text = re.compile('<.*?>').sub('', text) 
+        text = re.sub('\s+', ' ', text)  
+        text = re.sub(r'\[[0-9]*\]',' ',text) 
+        text = re.sub(r'[^\w\s]', '', str(text).lower().strip())
+        text = re.sub(r'\d',' ',text) 
+        text = re.sub(r'\s+',' ',text) 
         return text
 
     def _stopword(self, string):
@@ -94,6 +96,12 @@ class DataPreprocessor:
     def process(self, string):
         return self._lemmatizer(self._stopword(self._preprocess(string)))
 
+def check(df):
+    punctuation_pattern = r'[!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~]'
+    for item in df['clean_text']:
+        match = re.search(punctuation_pattern, item)
+        if bool(match) == True:
+            print(item.index())
 
 class DFProcessor:
     def __init__(self, filename) -> None:
