@@ -1,15 +1,14 @@
-import os
-os.environ['KMP_DUPLICATE_LIB_OK']='True'
-from lightning.pytorch.utilities.types import STEP_OUTPUT
-import lightning as L
-from lightning.pytorch.callbacks import ModelCheckpoint
-from pytorch_lightning.loggers import WandbLogger
-import wandb
-from transformers import DistilBertModel, AutoTokenizer, get_linear_schedule_with_warmup
-from sklearn.model_selection import train_test_split
 import torch.nn as nn
 import torch
 import numpy as np
+import wandb
+import lightning as L
+
+from lightning.pytorch.utilities.types import STEP_OUTPUT
+from lightning.pytorch.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import WandbLogger
+from transformers import DistilBertModel, AutoTokenizer, get_linear_schedule_with_warmup
+from sklearn.model_selection import train_test_split
 from torchmetrics import R2Score
 
 from data_processing import DataPreprocessor, create_dataloaders, DFProcessor
@@ -29,13 +28,30 @@ class TextAugmenterForBert:
         # num_added_toks = self.tokenizer.add_tokens(token_list)
         # print(f"Added {num_added_toks} to the tokenizer")
     
-    def augment_data(self):
-        encoded_corpus = self.tokenizer(text = self.df.title_body.to_list(),
-                            add_special_tokens=True,
-                            padding="max_length",
-                            truncation=True,
-                            max_length=200,
-                            return_attention_mask=True)
+    def encode_data(self, posts_included = True):
+        """Tokenizes input data using tokenizer declared in __init__. 
+
+        Args:
+            posts_included (bool, optional): Whether we want to include posts or not. Defaults to True.
+
+        Returns:
+            input_ids, labels, attention_mask: Tokenized input sentences, rudeness level and attention mask. This format
+            is required for transformers BERT-like models.
+        """
+        if posts_included:
+            encoded_corpus = self.tokenizer(self.df.post_title.to_list(), self.df.comment_body.to_list(),
+                                add_special_tokens=True,
+                                padding="max_length",
+                                truncation=True,
+                                max_length=200,
+                                return_attention_mask=True)
+        else:
+            encoded_corpus = self.tokenizer(self.df.comment_body.to_list(),
+                                add_special_tokens=True,
+                                padding="max_length",
+                                truncation=True,
+                                max_length=200,
+                                return_attention_mask=True)
 
         input_ids = encoded_corpus['input_ids']
         attention_mask = encoded_corpus['attention_mask']
@@ -55,16 +71,14 @@ class Regressor(L.LightningModule):
         dropout (float, optional): Dropout in a regression layer placed on top of distilBERT. Defaults to 0.2.
         lr (float, optional): learning rate parameter. Defaults to 1e-3.
     """
-    def __init__(self, bertlike_model, total_training_steps, dropout=0.2, lr=1e-3,
+    def __init__(self, bertlike_model, total_training_steps = 0, dropout=0.2, lr=1e-3,
                  accuracy_threshold: float = 0.05) -> None:
         super().__init__()
         D_in, D_out = 768, 1 #bert (or its derivatives) has 768 outputs 
         self.model = bertlike_model
-        self.model.enable_input_require_grads()
+        #self.model.enable_input_require_grads()
         self.regressor = nn.Sequential(
             nn.Dropout(dropout),
-            #nn.Linear(D_in, 2* D_in),
-            #nn.Dropout(dropout),
             nn.Linear(D_in, D_out)) #can experiment with bigger regression part, buuut freezing bert would be needed 
         self.loss = nn.MSELoss()
         self.R2 = R2Score()
@@ -132,28 +146,30 @@ class Regressor(L.LightningModule):
         self.log("test_std", std) #for experiments. dont include in official version
         return mae_loss, r2_score
     
-if __name__=="__main__":
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+        batch_inputs, batch_masks = \
+                        tuple(b for b in batch)
+        return torch.tanh(self(batch_inputs, batch_masks))
     
-
-
+if __name__=="__main__":
     #TODO move hyperparamethers to a seperate CONFIG file
     test_size = 0.2
     val_size = 0.5
     batch_size = 64
-    epochs = 10
+    epochs = 20
 
     model_name = 'distilbert-base-uncased'
 
     text_cleaner = DataPreprocessor()
     df_processor = DFProcessor(filename='ruddit_with_text.csv')
 
-    new_df = df_processor.process_df(text_cleaner)
+    new_df = df_processor.process_df_BERT(text_cleaner, posts_included=False)
 
     data_augmentator = TextAugmenterForBert(tokenizer_name=model_name, df = new_df)
     #here we do everything tokenizer-related i.e. encoding corpus, getting input ids etc.
-    input_ids, labels, attention_mask = data_augmentator.augment_data()
+    input_ids, labels, attention_mask = data_augmentator.encode_data(posts_included=False)
     
-    #80% train 10% test 10% val is proposed
+    # 80% train 10% test 10% val is proposed
     train_inputs, test_inputs, train_labels, test_labels, train_masks, test_masks = \
             train_test_split(input_ids, labels, attention_mask, test_size=test_size, shuffle=True) #note that shuffling is done here not in dataloaders
     val_inputs, test_inputs, val_labels, test_labels, val_masks, test_masks = \
@@ -165,8 +181,7 @@ if __name__=="__main__":
                                         test_labels, batch_size)
     val_dataloader = create_dataloaders(val_inputs, val_masks, 
                                         val_labels, batch_size)
-    
-    #here declare bert-like model
+    # here declare bert-like model
     bertlike_model = DistilBertModel.from_pretrained(model_name, num_labels = 1)
     #bertlike_model.resize_token_embeddings(len(data_augmentator.tokenizer)) #OPTIONAL - IN PRACTISE RUINED RESULTS!!!
     model = Regressor(bertlike_model=bertlike_model, total_training_steps=len(train_dataloader) * epochs, lr=2e-5)
@@ -180,16 +195,16 @@ if __name__=="__main__":
             dirpath = "checkpoints",
             monitor="val_loss", 
             save_top_k=1,
-            filename="DistilBERT-{epoch:02d}-{val_loss:.2f}", #NAT - No added tokens (no resizing bert embeddings), 
-                                                                        #YP - "Yes preprocessing" - Used text preprocessing proposed by Mohammed
+            filename="DistilBERT-with-posts-cleaned-dropout-{epoch:02d}-{val_loss:.2f}", 
+                
         ),
     ]
     trainer = L.Trainer(
-        accelerator="cpu",
+        accelerator="gpu",
         max_epochs = epochs, 
         logger = wandb_logger, 
         callbacks = callbacks
     )
-    #trainer.fit(model, train_dataloader, val_dataloader)
-    trainer.test(model, ckpt_path="checkpoints/DistilBERT-NAT-NP-WITH_SCHEDULER_RUN2_NO_FREEZE-epoch=19-val_loss=0.03.ckpt", dataloaders=test_dataloader) #Uncomment to TEST
-    #wandb.save('checkpoints/*ckpt*') #save checkpoint to wandb 
+    trainer.fit(model, train_dataloader, val_dataloader)
+    trainer.test(model, dataloaders=test_dataloader) #Uncomment to TEST
+    wandb.save('checkpoints/*ckpt*') #save checkpoint to wandb 
