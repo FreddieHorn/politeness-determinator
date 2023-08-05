@@ -17,6 +17,7 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 from torch import Tensor
 from torch import nn as nn
 from torch.nn.functional import l1_loss, mse_loss
+from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset
 from torcheval.metrics.functional import r2_score
 from tqdm import tqdm
@@ -45,39 +46,49 @@ class RudditDataset(Dataset):
         return torch.tensor(item[0]), item[1]
 
 
-class LinearModel(L.LightningModule):
-    """A simple 5-layered linear model that will be used as a baseline to compare the performance with the other more sophisticated models.
+class GRURegressor(L.LightningModule):
+    """A GRU model with a linear regression layer
 
     Args:
+        hidden_size (int): hidden size of the GRU layer (default: `128`).
+        num_layers (int): number of GRU cells within the GRU layer (default: `1`).
+        dropout (float): GRU layer dropout (default: `0.0`).
         accuracy_threshold (float): maximum value a prediction can be away from the true value before it is considered inaccurate (default: `0.05`).
         lr (float): learning rate (default: `1e-3`).
     """  # noqa: E501
 
     def __init__(
         self,
+        hidden_size: int = 128,
+        num_layers: int = 1,
+        dropout: float = 0.0,
         accuracy_threshold: float = 0.1,
-        lr: int = 1e-3,  # type: ignore
+        lr: int = 5e-3,  # type: ignore
     ):
         super().__init__()
         self.save_hyperparameters()
         self.threshold = accuracy_threshold
         self.lr = lr
 
+        self.gru = nn.GRU(
+            input_size=300,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            bidirectional=True,
+            dropout=dropout,
+        )
+        # regression layer
         self.regressor = nn.Sequential(
-            nn.Linear(300, 300),
+            nn.Linear(hidden_size * 2, hidden_size),
             nn.GELU(),
-            nn.Linear(300, 128),
-            nn.GELU(),
-            nn.Linear(128, 32),
-            nn.GELU(),
-            nn.Linear(32, 8),
-            nn.GELU(),
-            nn.Linear(8, 1),
+            nn.Linear(hidden_size, 1),
             nn.Tanh(),
         )
 
     def forward(self, X: Tensor) -> Tensor:
-        y = self.regressor(X).squeeze()
+        output, h = self.gru(X.permute(1, 0, 2))
+        y = output[-1]
+        y = self.regressor(y).squeeze()
         return y
 
     def training_step(self, batch, batch_idx) -> STEP_OUTPUT:
@@ -139,9 +150,12 @@ class LinearModel(L.LightningModule):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--hidden_size", type=int, default=128)
+    parser.add_argument("--num_layers", "-n", type=int, default=3)
+    parser.add_argument("--dropout", "-d", type=float, default=0.0)
     parser.add_argument("--accuracy_threshold", "-t", type=float, default=0.1)
-    parser.add_argument("--lr", "-l", type=float, default=1e-3)
-    parser.add_argument("--epochs", "-e", type=int, default=50)
+    parser.add_argument("--lr", "-l", type=float, default=5e-3)
+    parser.add_argument("--epochs", "-e", type=int, default=30)
     parser.add_argument("--run", "-r", type=str, default=None)
     parser.add_argument("--posts", "-p", type=bool, default=False)
     args = parser.parse_args()
@@ -156,19 +170,19 @@ if __name__ == "__main__":
         ruddit_df = ruddit_df[ruddit_df["comment_body"] != "[deleted]"]
         comments = ruddit_df["comment_body"].tolist()
 
-    # build embedding vector for each comment
+    # tokenize the comments and build embedding vectors
     print("Building spaCy embeddings for the comments")
     nlp_md = spacy.load("en_core_web_md")
     preprocessor = DataPreprocessor()
-    embeddings = np.array(
-        [
-            nlp_md(preprocessor.process(comment)).vector
-            for comment in tqdm(comments)
-            if preprocessor.process(comment)
-        ]
-    )
+    comments = [
+        nlp_md(preprocessor.process(comment))
+        for comment in tqdm(comments)
+        if preprocessor.process(comment)
+    ]
     scores = ruddit_df["offensiveness_score"].tolist()
     scores = torch.tensor(scores)
+    # replace each token with its embedding vector
+    embeddings = [np.array([token.vector for token in comment]) for comment in comments]
 
     ruddit = list(zip(embeddings, scores))
     shuffle(ruddit)
@@ -179,12 +193,21 @@ if __name__ == "__main__":
     validation_dataset = RudditDataset(split="validation")
     test_dataset = RudditDataset(split="test")
 
+    # pads the comments in each batch to the size of the longest comment
+    # instead of padding all the database
+    def collate(batch):
+        batch_comments, batch_scores = zip(*batch)
+        return pad_sequence(batch_comments, batch_first=True), torch.tensor(
+            batch_scores
+        )
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=64,
         shuffle=True,
         drop_last=False,
         num_workers=os.cpu_count(),  # type: ignore
+        collate_fn=collate,
     )
     validation_loader = DataLoader(
         validation_dataset,
@@ -192,6 +215,7 @@ if __name__ == "__main__":
         shuffle=False,
         drop_last=False,
         num_workers=os.cpu_count(),  # type: ignore
+        collate_fn=collate,
     )
     test_loader = DataLoader(
         test_dataset,
@@ -199,9 +223,13 @@ if __name__ == "__main__":
         shuffle=False,
         drop_last=False,
         num_workers=os.cpu_count(),  # type: ignore
+        collate_fn=collate,
     )
 
-    model = LinearModel(
+    gru = GRURegressor(
+        hidden_size=args.hidden_size,
+        num_layers=args.num_layers,
+        dropout=args.dropout,
         accuracy_threshold=args.accuracy_threshold,
         lr=args.lr,
     )
@@ -215,6 +243,6 @@ if __name__ == "__main__":
         enable_model_summary=False,
     )
 
-    trainer.fit(model, train_loader, validation_loader)
-    trainer.test(model, test_loader)
+    trainer.fit(gru, train_loader, validation_loader)
+    trainer.test(gru, test_loader)
     wandb.finish()
