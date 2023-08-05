@@ -2,6 +2,7 @@ import datetime
 import itertools
 import re
 import string
+import numpy as np
 
 import nltk
 import pandas as pd
@@ -11,6 +12,27 @@ from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
 from torch.utils.data import DataLoader, TensorDataset
 
+PUNCT_TO_REMOVE = string.punctuation
+
+def tensors_to_numpy(array_of_tensors):
+    # Check if the input is a list or tuple (array) of tensors
+    if not isinstance(array_of_tensors, (list, tuple)):
+        raise ValueError("Input should be a list or tuple of tensors.")
+    
+    # Get the total number of elements in all tensors combined
+    total_elements = sum(np.prod(tensor.shape) for tensor in array_of_tensors)
+
+    # Create a numpy array to hold all elements from the tensors
+    numpy_array = np.zeros(total_elements)
+
+    # Flatten and concatenate each tensor into the numpy_array
+    index = 0
+    for tensor in array_of_tensors:
+        tensor = tensor.detach().to('cpu').numpy()
+        numpy_array[index:index + np.prod(tensor.shape)] = tensor.flatten()
+        index += np.prod(tensor.shape)
+
+    return numpy_array
 
 def format_time(elapsed):
     """
@@ -48,22 +70,33 @@ def tokenize_words(dataframe, column):
 
 
 class DataPreprocessor:
+    """Class that is responsible for cleaning text.
+    """
     def __init__(self) -> None:
         # Initialize the lemmatizer
         self.wl = WordNetLemmatizer()
 
     def _preprocess(self, text):
-        text = text.lower()
+        text = text.lower() 
         text = text.strip()
-        text = re.compile("<.*?>").sub("", text)
-        text = re.compile("[%s]" % re.escape(string.punctuation)).sub(" ", text)
-        text = re.sub("\s+", " ", text)
-        text = re.sub(r"\[[0-9]*\]", " ", text)
-        text = re.sub(r"[^\w\s]", "", str(text).lower().strip())
-        text = re.sub(r"\d", " ", text)
-        text = re.sub(r"\s+", " ", text)
+        text = text.translate(str.maketrans('', '', PUNCT_TO_REMOVE))
+        text = re.compile('<.*?>').sub('', text) 
+        text = re.sub('\s+', ' ', text)  
+        text = re.sub(r'\[[0-9]*\]',' ',text) 
+        text = re.sub(r'[^\w\s]', '', str(text).lower().strip())
+        text = re.sub(r'\d',' ',text) 
+        text = re.sub(r'\s+',' ',text) 
         return text
+    
+    def _preprocessBERT(self, text):
+        # Remove any punctuation
+        cleaned_text = re.sub(r'[^\w\s]', '', text)
 
+        # Remove strings that only consist of punctuation (except words starting with two hashtags)
+        cleaned_text = re.sub(r'(?<!#)\b[^\w\s]+\b', '', cleaned_text)
+
+        return cleaned_text
+    
     def _stopword(self, string):
         a = [i for i in string.split() if i not in stopwords.words("english")]
         return " ".join(a)
@@ -93,21 +126,49 @@ class DataPreprocessor:
 
     def process(self, string):
         return self._lemmatizer(self._stopword(self._preprocess(string)))
+    
+    def processBERT(self, string):
+        return self._lemmatizer(self._stopword(self._preprocessBERT(string)))
 
+def check(df):
+    punctuation_pattern = r'[!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~]'
+    for item in df['clean_text']:
+        match = re.search(punctuation_pattern, item)
+        if bool(match) == True:
+            print(item.index())
 
 class DFProcessor:
-    def __init__(self, filename) -> None:
+    """Handles processing of a given column of the dataframe.
+
+    Args:
+        filename (str): filename
+    """
+    def __init__(self, filename: str) -> None:
         self.filename = filename
 
     def process_df(self, text_cleaner):
         dataset = pd.read_csv(self.filename)
         dataset = dataset[dataset['comment_body'] != '[deleted]'] #deleting deleted comments from the dataset since they are useless
-        #dataset['comment_body'] = dataset['comment_body'].apply(lambda x: text_cleaner.process(x))
-        new_df = dataset.filter(items=['comment_body', 'offensiveness_score'])
+        dataset = dataset[dataset['post_title'] != '[deleted]']
+        dataset = dataset[dataset['post_title'] != '[deleted by user]']
+        dataset['title_body'] = dataset['comment_body']+ ' ' + dataset['post_title']
+        dataset['title_body'] = dataset['title_body'].apply(lambda x: text_cleaner.process(x))
+        new_df = dataset.filter(items=['title_body', 'offensiveness_score'])
 
-        print(new_df.dtypes)
         return new_df
+    def process_df_BERT(self, text_cleaner, post_included = True):
+        dataset = pd.read_csv(self.filename)
+        dataset = dataset[dataset['comment_body'] != '[deleted]'] #deleting deleted comments from the dataset since they are useless
+        dataset['comment_body'] = dataset['comment_body'].apply(lambda x: text_cleaner.processBERT(x)) #in practise it did not help much
+        if post_included:
+            dataset = dataset[dataset['post_title'] != '[deleted]']
+            dataset = dataset[dataset['post_title'] != '[deleted by user]']
+            dataset['post_title'] = dataset['post_title'].apply(lambda x: text_cleaner.processBERT(x))
+            new_df = dataset.filter(items=['post_title','comment_body', 'offensiveness_score'])
+        else:
+            new_df = dataset.filter(items=['comment_body', 'offensiveness_score'])
 
+        return new_df
 
 if __name__ == "__main__":
     pass
