@@ -2,10 +2,14 @@
 
 import argparse
 import os
-os.environ['KMP_DUPLICATE_LIB_OK']='True'
+from operator import itemgetter
+from random import shuffle
+
 import lightning as L
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
 import spacy
 import torch
 from lightning.pytorch.loggers.wandb import WandbLogger
@@ -18,40 +22,20 @@ from torcheval.metrics.functional import r2_score
 from tqdm import tqdm
 
 import wandb
-
-wandb.login()
-
-# load the dataset
-ruddit = pd.read_csv("ruddit_with_text.csv")
-nlp_md = spacy.load("en_core_web_sm")
-
-# exclude deleted comments
-filter = ruddit[ruddit["comment_body"] != "[deleted]"]
-comments = filter["comment_body"].tolist()
-# build embedding vector for each comment
-embeddings = np.array([nlp_md(comment).vector for comment in tqdm(comments)])
-scores = filter["offensiveness_score"].tolist()
-scores = torch.tensor(scores)
+from data_processing import DFProcessor, DataPreprocessor
 
 
 class RudditDataset(Dataset):
-    def __init__(
-        self,
-        training: bool = True,
-        validation: bool = False,
-        test: bool = False,
-    ):
+    def __init__(self, split: str):
         super().__init__()
-        data = list(zip(embeddings, scores))
-        validation_split = int(round(len(data) * 0.7))
-        test_split = int(round(len(data) * 0.8))
-
-        if training:
-            self.data = data[:validation_split]
-        elif validation:
-            self.data = data[validation_split:test_split]
-        elif test:
-            self.data = data[test_split:]
+        if split == "training":
+            self.data = ruddit[:validation_split]
+        elif split == "validation":
+            self.data = ruddit[validation_split:test_split]
+        elif split == "test":
+            self.data = sorted(ruddit[test_split:], key=itemgetter(1), reverse=True)
+        else:
+            raise ValueError
 
     def __len__(self):
         return len(self.data)
@@ -59,34 +43,6 @@ class RudditDataset(Dataset):
     def __getitem__(self, index):
         item = self.data[index]
         return torch.tensor(item[0]), item[1]
-
-
-train_dataset = RudditDataset()
-validation_dataset = RudditDataset(validation=True)
-test_dataset = RudditDataset(test=True)
-
-
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=64,
-    shuffle=True,
-    drop_last=False,
-    num_workers=os.cpu_count(),  # type: ignore
-)
-validation_loader = DataLoader(
-    validation_dataset,
-    batch_size=64,
-    shuffle=False,
-    drop_last=False,
-    num_workers=os.cpu_count(),  # type: ignore
-)
-test_loader = DataLoader(
-    test_dataset,
-    batch_size=64,
-    shuffle=False,
-    drop_last=False,
-    num_workers=os.cpu_count(),  # type: ignore
-)
 
 
 class LinearModel(L.LightningModule):
@@ -99,7 +55,7 @@ class LinearModel(L.LightningModule):
 
     def __init__(
         self,
-        accuracy_threshold: float = 0.05,
+        accuracy_threshold: float = 0.1,
         lr: int = 1e-3,  # type: ignore
     ):
         super().__init__()
@@ -109,13 +65,13 @@ class LinearModel(L.LightningModule):
 
         self.regressor = nn.Sequential(
             nn.Linear(300, 300),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(300, 128),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(128, 32),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(32, 8),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Linear(8, 1),
             nn.Tanh(),
         )
@@ -126,32 +82,49 @@ class LinearModel(L.LightningModule):
 
     def training_step(self, batch, batch_idx) -> STEP_OUTPUT:
         comments, scores = batch
-        ratings = self(comments)
-        loss = mse_loss(ratings, scores)
+        predictions = self(comments)
+        loss = mse_loss(predictions, scores)
         self.log("training loss", loss, on_epoch=True, prog_bar=True)
         return loss
 
     def validation_step(self, batch, batch_idx) -> STEP_OUTPUT:
         comments, scores = batch
-        ratings = self(comments)
-        loss = mse_loss(ratings, scores)
+        predictions = self(comments)
+        loss = mse_loss(predictions, scores)
         self.log("validation loss", loss, on_epoch=True, prog_bar=True)
         return loss
 
+    def on_test_epoch_start(self):
+        self.scores, self.predictions = [], []
+
     def test_step(self, batch, batch_idx) -> STEP_OUTPUT:
         comments, scores = batch
-        ratings = self(comments)
-        score = r2_score(ratings, scores)
-        accuracy = torch.sum(torch.abs(scores - ratings) < self.threshold).item() / len(
-            scores
-        )
-        loss = mse_loss(ratings, scores)
+        predictions = self(comments)
+        self.scores += scores.tolist()
+        self.predictions += predictions.tolist()
+        score = r2_score(predictions, scores)
+        accuracy = torch.sum(
+            torch.abs(scores - predictions) < self.threshold
+        ).item() / len(scores)
+        loss = l1_loss(predictions, scores)
         self.log("test R2 score", score, prog_bar=True)
         self.log("test accuracy", accuracy, prog_bar=True)
         self.log("test loss", loss, prog_bar=True)
         # combine the 3 metrics
-        print(loss)
-        return loss
+        return score * accuracy - loss
+
+    def on_test_epoch_end(self) -> None:
+        fig = plt.figure(figsize=(15, 10))
+        plt.xlabel("comments")
+        plt.ylabel("offensiveness score")
+        plt.title("predicted scores vs true scores")
+        sns.scatterplot(
+            pd.DataFrame(
+                list(zip(self.predictions, self.scores)),
+                columns=["predicted scores", "true scores"],
+            )
+        )
+        wandb.log({"comparison": wandb.Image(fig)})
 
     # predict a score for a single comment
     def predict(self, X: Tensor) -> Tensor:
@@ -161,22 +134,80 @@ class LinearModel(L.LightningModule):
         return y
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), self.lr)
+        return torch.optim.AdamW(self.parameters(), self.lr)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--accuracy_threshold", "-t", type=float, default=0.05)
+    parser.add_argument("--accuracy_threshold", "-t", type=float, default=0.1)
     parser.add_argument("--lr", "-l", type=float, default=1e-3)
-    parser.add_argument("--epochs", "-e", type=int, default=10)
+    parser.add_argument("--epochs", "-e", type=int, default=50)
+    parser.add_argument("--run", "-r", type=str, default=None)
+    parser.add_argument("--posts", "-p", type=bool, default=False)
     args = parser.parse_args()
+
+    filename = "ruddit_with_text.csv"
+    if args.posts:
+        ruddit_df = DFProcessor(filename).process_df()
+        comments = ruddit_df["title_body"].tolist()
+    else:
+        ruddit_df = pd.read_csv(filename)
+        # exclude deleted comments
+        ruddit_df = ruddit_df[ruddit_df["comment_body"] != "[deleted]"]
+        comments = ruddit_df["comment_body"].tolist()
+
+    # build embedding vector for each comment
+    print("Building spaCy embeddings for the comments")
+    nlp_md = spacy.load("en_core_web_md")
+    preprocessor = DataPreprocessor()
+    embeddings = np.array(
+        [
+            nlp_md(preprocessor.process(comment)).vector
+            for comment in tqdm(comments)
+            if preprocessor.process(comment)
+        ]
+    )
+    scores = ruddit_df["offensiveness_score"].tolist()
+    scores = torch.tensor(scores)
+
+    ruddit = list(zip(embeddings, scores))
+    shuffle(ruddit)
+    validation_split = int(round(len(ruddit) * 0.7))
+    test_split = int(round(len(ruddit) * 0.8))
+
+    train_dataset = RudditDataset(split="training")
+    validation_dataset = RudditDataset(split="validation")
+    test_dataset = RudditDataset(split="test")
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=64,
+        shuffle=True,
+        drop_last=False,
+        num_workers=os.cpu_count(),  # type: ignore
+    )
+    validation_loader = DataLoader(
+        validation_dataset,
+        batch_size=64,
+        shuffle=False,
+        drop_last=False,
+        num_workers=os.cpu_count(),  # type: ignore
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=64,
+        shuffle=False,
+        drop_last=False,
+        num_workers=os.cpu_count(),  # type: ignore
+    )
 
     model = LinearModel(
         accuracy_threshold=args.accuracy_threshold,
         lr=args.lr,
     )
 
-    logger = WandbLogger(project="rudeness_determinator")
+    wandb.login()
+    logger = WandbLogger(project="rudeness_determinator", name=args.run)
 
     trainer = L.Trainer(
         logger=logger,
