@@ -14,11 +14,11 @@ model_name = 'distilbert-base-uncased'
 text_cleaner = DataPreprocessor()
 df_processor = DFProcessor(filename='ruddit_with_text.csv')
 
-new_df = df_processor.process_df_BERT(text_cleaner, posts_included=False)
+new_df = df_processor.process_df_BERT(text_cleaner, posts_included=True) #dont forget to change posts_included value to a proper one
 
 data_augmentator = TextAugmenterForBert(tokenizer_name=model_name, df = new_df)
 #here we do everything tokenizer-related i.e. encoding corpus, getting input ids etc.
-input_ids, labels, attention_mask = data_augmentator.encode_data(posts_included=False)
+input_ids, labels, attention_mask = data_augmentator.encode_data(posts_included=True) #dont forget to change posts_included value to a proper one
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -31,7 +31,7 @@ sortedAttentionmask = attention_mask[inds]
 testing_dataloader = create_dataloaders_testing(sortedInputids, sortedAttentionmask, batch_size=batch_size)
 
 bertlike_model = DistilBertModel.from_pretrained(model_name, num_labels = 1)
-model = Regressor.load_from_checkpoint("checkpoints/DistilBERT-with-posts-cleaned-dropout-epoch=19-val_loss=0.04.ckpt",
+model = Regressor.load_from_checkpoint("checkpoints/DistilBERT-with-posts-cleaned-dropout-epoch=19-val_loss=0.04.ckpt", #change to a proper checkpoint
                                         bertlike_model=bertlike_model, lr=2e-5)
 trainer = L.Trainer(
         accelerator="gpu"
@@ -42,9 +42,10 @@ outputs = trainer.predict(model, dataloaders=testing_dataloader)
 outputs = tensors_to_numpy(outputs)
 
 sortedInputindex = np.arange(0, sortedInputids.shape[0], 1)
-plt.scatter(sortedInputindex, sortedLabels, label = "true labels")
-plt.scatter(sortedInputindex, outputs, label = "model predictions")
+plt.scatter(sortedInputindex, sortedLabels)
+plt.scatter(sortedInputindex, outputs, alpha=0.7)
 plt.xlabel("Input sentence id")
 plt.ylabel("Rudeness level")
 plt.title("True vs predicted values of the rudeness level")
+plt.legend(["True labels", "Predicted labels"])
 plt.show()

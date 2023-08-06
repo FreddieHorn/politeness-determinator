@@ -53,6 +53,13 @@ def create_dataloaders(inputs, masks, labels, batch_size):
     dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=5)
     return dataloader
 
+def create_dataloaders_testing(inputs, masks, batch_size):
+    input_tensor = torch.tensor(inputs, dtype=torch.int32)
+    mask_tensor = torch.tensor(masks, dtype=torch.int32)
+    dataset = TensorDataset(input_tensor, mask_tensor)
+    dataloader = DataLoader(dataset, batch_size=batch_size)
+    return dataloader
+
 
 def tokenize_function(examples, tokenizer):
     """This function tokenizes the text in the examples dictionary.
@@ -157,13 +164,13 @@ class DFProcessor:
 
         dataset["title_body"] = dataset["comment_body"] + " " + dataset["post_title"]
         new_df = dataset.filter(items=["title_body", "offensiveness_score"])
-       return new_df
+        return new_df
     
-    def process_df_BERT(self, text_cleaner, post_included = True):
+    def process_df_BERT(self, text_cleaner, posts_included = True):
         dataset = pd.read_csv(self.filename)
         dataset = dataset[dataset['comment_body'] != '[deleted]'] #deleting deleted comments from the dataset since they are useless
         dataset['comment_body'] = dataset['comment_body'].apply(lambda x: text_cleaner.processBERT(x)) #in practise it did not help much
-        if post_included:
+        if posts_included:
             dataset = dataset[dataset['post_title'] != '[deleted]']
             dataset = dataset[dataset['post_title'] != '[deleted by user]']
             dataset['post_title'] = dataset['post_title'].apply(lambda x: text_cleaner.processBERT(x))
