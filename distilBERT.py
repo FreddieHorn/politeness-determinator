@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import wandb
 import lightning as L
+import argparse
 
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 from lightning.pytorch.callbacks import ModelCheckpoint
@@ -95,7 +96,7 @@ class Regressor(L.LightningModule):
         outputs = self.model(input_ids, attention_masks)
         pooled_output = outputs[0].mean(dim=1) #Last layer hidden-state of the first token of the sequence (classification token) (but also can be used for regression)
         output = self.regressor(pooled_output)
-        return output
+        return torch.tanh(output)
     
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=0.01)
@@ -107,10 +108,9 @@ class Regressor(L.LightningModule):
         batch_inputs, batch_masks, batch_labels = \
                         tuple(b for b in train_batch)
         outputs = self(batch_inputs, batch_masks)
-        preds = torch.tanh(outputs)
-        loss = self.loss(preds.squeeze(1).float(), 
+        loss = self.loss(outputs.squeeze(1).float(), 
                         batch_labels.float())
-        std = torch.std(preds.squeeze(1).float())
+        std = torch.std(outputs.squeeze(1).float())
         self.log("train_loss", loss)
         self.log("train_std", std) #for experiments. dont include in official version
         return loss
@@ -119,10 +119,9 @@ class Regressor(L.LightningModule):
         batch_inputs, batch_masks, batch_labels = \
                         tuple(b for b in val_batch)
         outputs = self(batch_inputs, batch_masks)
-        preds = torch.tanh(outputs)
-        val_loss = self.loss(preds.squeeze(1).float(), 
+        val_loss = self.loss(outputs.squeeze(1).float(), 
                         batch_labels.float())
-        std = torch.std(preds.squeeze(1).float())
+        std = torch.std(outputs.squeeze(1).float())
         self.log("val_loss", val_loss)
         self.log("val_std", std) #for experiments. dont include in official version
         return val_loss
@@ -131,13 +130,12 @@ class Regressor(L.LightningModule):
         batch_inputs, batch_masks, batch_labels = \
                         tuple(b for b in test_batch)
         outputs = self(batch_inputs, batch_masks)
-        preds = torch.tanh(outputs) 
-        mae_loss = self.MAE(preds.squeeze(1).float(), 
+        mae_loss = self.MAE(outputs.squeeze(1).float(), 
                         batch_labels.float())
-        r2_score = self.R2(preds.squeeze(1).float(), #warning! using batch_size = 8 made the last test step have only one sample in 
+        r2_score = self.R2(outputs.squeeze(1).float(), #warning! using batch_size = 8 made the last test step have only one sample in 
                             batch_labels.float())
-        std = torch.std(preds.squeeze(1).float())   #preds and batch labels. r2 needs > 1 samples so I increased batch size to 16
-        accuracy = torch.sum(torch.abs(batch_labels - preds.squeeze(1)) < self.threshold).item() / len(
+        std = torch.std(outputs.squeeze(1).float())   #preds and batch labels. r2 needs > 1 samples so I increased batch size to 16
+        accuracy = torch.sum(torch.abs(batch_labels - outputs.squeeze(1)) < self.threshold).item() / len(
             batch_labels
         )
         self.log("test accuracy", accuracy)
@@ -155,19 +153,29 @@ if __name__=="__main__":
     #TODO move hyperparamethers to a seperate CONFIG file
     test_size = 0.2
     val_size = 0.5
-    batch_size = 64
-    epochs = 20
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dropout", "-d", type=float, default=0.2)
+    parser.add_argument("--accuracy_threshold", "-t", type=float, default=0.05)
+    parser.add_argument("--lr", "-l", type=float, default=2e-5)
+    parser.add_argument("--epochs", "-e", type=int, default=20)
+    parser.add_argument("--run", "-r", type=str, default=None)
+    parser.add_argument("--posts", "-p", type=bool, default=False)
+    parser.add_argument("--batch_size", "-bs", type=int, default=32)
+    args = parser.parse_args()
+
+    print(args.run)
+    print(args.batch_size)
     model_name = 'distilbert-base-uncased'
 
     text_cleaner = DataPreprocessor()
     df_processor = DFProcessor(filename='ruddit_with_text.csv')
 
-    new_df = df_processor.process_df_BERT(text_cleaner, posts_included=False)
+    new_df = df_processor.process_df_BERT(text_cleaner, posts_included=args.posts)
 
     data_augmentator = TextAugmenterForBert(tokenizer_name=model_name, df = new_df)
     #here we do everything tokenizer-related i.e. encoding corpus, getting input ids etc.
-    input_ids, labels, attention_mask = data_augmentator.encode_data(posts_included=False)
+    input_ids, labels, attention_mask = data_augmentator.encode_data(posts_included=args.posts)
     
     # 80% train 10% test 10% val is proposed
     train_inputs, test_inputs, train_labels, test_labels, train_masks, test_masks = \
@@ -176,16 +184,21 @@ if __name__=="__main__":
             train_test_split(test_inputs, test_labels, test_masks, test_size=val_size)
     
     train_dataloader = create_dataloaders(train_inputs, train_masks, 
-                                        train_labels, batch_size)
+                                        train_labels, args.batch_size)
     test_dataloader = create_dataloaders(test_inputs, test_masks, 
-                                        test_labels, batch_size)
+                                        test_labels, args.batch_size)
     val_dataloader = create_dataloaders(val_inputs, val_masks, 
-                                        val_labels, batch_size)
+                                        val_labels, args.batch_size)
     # here declare bert-like model
     bertlike_model = DistilBertModel.from_pretrained(model_name, num_labels = 1)
     #bertlike_model.resize_token_embeddings(len(data_augmentator.tokenizer)) #OPTIONAL - IN PRACTISE RUINED RESULTS!!!
-    model = Regressor(bertlike_model=bertlike_model, total_training_steps=len(train_dataloader) * epochs, lr=2e-5)
-    wandb_logger = WandbLogger(project = "rudeness_determinator")
+    model = Regressor(bertlike_model=bertlike_model,
+                       total_training_steps=len(train_dataloader) * args.epochs,
+                       lr=args.lr,
+                       dropout=args.dropout,
+                       accuracy_threshold=args.accuracy_threshold)
+    
+    wandb_logger = WandbLogger(project = "rudeness_determinator", name=args.run)
     #TODO early stopping.
     #TODO get more metrics to wandb
     wandb.init()
@@ -195,16 +208,17 @@ if __name__=="__main__":
             dirpath = "checkpoints",
             monitor="val_loss", 
             save_top_k=1,
-            filename="DistilBERT-with-posts-cleaned-dropout-{epoch:02d}-{val_loss:.2f}", 
+            filename="NAME_OF_THE_CHECKPOINT-{epoch:02d}-{val_loss:.2f}", 
                 
         ),
     ]
+    
     trainer = L.Trainer(
-        accelerator="gpu",
-        max_epochs = epochs, 
+        accelerator='gpu' if torch.cuda.is_available() else 'cpu',
+        max_epochs = args.epochs, 
         logger = wandb_logger, 
         callbacks = callbacks
     )
     trainer.fit(model, train_dataloader, val_dataloader)
     trainer.test(model, dataloaders=test_dataloader) #Uncomment to TEST
-    wandb.save('checkpoints/*ckpt*') #save checkpoint to wandb 
+    #wandb.save('checkpoints/*ckpt*') #save checkpoint to wandb 
